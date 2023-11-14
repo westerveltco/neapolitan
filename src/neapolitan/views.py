@@ -171,10 +171,7 @@ class CRUDView(View):
             # If the specific role-based method or property does not exist, fall back to the default 'fields'.
             return self.fields
 
-        msg = (
-            "'%s' must either define 'form_class' or both 'model' and "
-            "'fields', or override 'get_form_class()'"
-        )
+        msg = "'%s' must define 'fields' or override 'get_fields()'"
         raise ImproperlyConfigured(msg % self.__class__.__name__)
 
     def get_detail_fields(self):
