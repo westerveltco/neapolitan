@@ -331,9 +331,14 @@ class CRUDView(View):
 
     def list(self, request, *args, **kwargs):
         queryset = self.get_queryset()
-        filterset = self.get_filterset(queryset)
-        if filterset is not None:
-            queryset = filterset.qs
+        self.filterset = self.get_filterset(queryset)
+
+        if self.filterset and (
+            not self.filterset.is_bound
+            or self.filterset.is_valid()
+            or not self.get_strict()
+        ):
+            queryset = self.filterset.qs
 
         if not self.allow_empty and not queryset.exists():
             raise Http404
@@ -344,6 +349,7 @@ class CRUDView(View):
             self.object_list = queryset
             context = self.get_context_data(
                 page_obj=None,
+                filter=self.filterset,
                 is_paginated=False,
                 paginator=None,
             )
@@ -353,6 +359,7 @@ class CRUDView(View):
             self.object_list = page.object_list
             context = self.get_context_data(
                 page_obj=page,
+                filter=self.filterset,
                 is_paginated=page.has_other_pages(),
                 paginator=page.paginator,
             )
