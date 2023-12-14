@@ -53,7 +53,7 @@ def object_list(objects, fields):
     headers = [objects[0]._meta.get_field(f).verbose_name for f in fields]
     object_list = [
         {
-            "object": object,
+            "object": {f: getattr(object, f) for f in fields},
             "fields": [
                 object._meta.get_field(f).value_to_string(object) for f in fields
             ],
@@ -61,6 +61,7 @@ def object_list(objects, fields):
         }
         for object in objects
     ]
+
     return {
         "headers": headers,
         "object_list": object_list,

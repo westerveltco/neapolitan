@@ -69,6 +69,8 @@ class CRUDView(View):
     role: Role
     model = None
     fields = None  # TODO: handle this being None.
+    detail_fields = None
+    list_fields = None
 
     # Object lookup parameters. These are used in the URL kwargs, and when
     # performing the model instance lookup.
@@ -151,6 +153,37 @@ class CRUDView(View):
         )
         raise ImproperlyConfigured(msg % self.__class__.__name__)
 
+    def get_fields(self):
+        # Construct the method name based on the current role.
+        # For example, if self.role is Role.LIST, method_name will be 'list_fields'.
+        method_name = f"{self.role}_fields"
+
+        if self.fields is not None:
+            # Check if the attribute (method or property) with the constructed name exists in the class.
+            if hasattr(self, method_name):
+                # If the attribute exists, check if it is callable (i.e., if it's a method).
+                if callable(getattr(self, method_name)):
+                    # If it's a callable method, call the method and return its result.
+                    return getattr(self, method_name)()
+                # If the attribute exists but is not callable (e.g., a property), directly return its value.
+                return getattr(self, method_name)
+            
+            # If the specific role-based method or property does not exist, fall back to the default 'fields'.
+            return self.fields
+
+        msg = "'%s' must define 'fields' or override 'get_fields()'"
+        raise ImproperlyConfigured(msg % self.__class__.__name__)
+
+    def get_detail_fields(self):
+        if self.detail_fields:
+            return self.detail_fields
+        return self.fields
+
+    def get_list_fields(self):
+        if self.list_fields:
+            return self.list_fields
+        return self.fields
+
     # Form instantiation
 
     def get_form_class(self):
@@ -160,8 +193,8 @@ class CRUDView(View):
         if self.form_class is not None:
             return self.form_class
 
-        if self.model is not None and self.fields is not None:
-            return model_forms.modelform_factory(self.model, fields=self.fields)
+        if self.model is not None and self.get_fields() is not None:
+            return model_forms.modelform_factory(self.model, fields=self.get_fields())
 
         msg = (
             "'%s' must either define 'form_class' or both 'model' and "
@@ -298,9 +331,14 @@ class CRUDView(View):
 
     def list(self, request, *args, **kwargs):
         queryset = self.get_queryset()
-        filterset = self.get_filterset(queryset)
-        if filterset is not None:
-            queryset = filterset.qs
+        self.filterset = self.get_filterset(queryset)
+
+        if self.filterset and (
+            not self.filterset.is_bound
+            or self.filterset.is_valid()
+            or not self.get_strict()
+        ):
+            queryset = self.filterset.qs
 
         if not self.allow_empty and not queryset.exists():
             raise Http404
@@ -311,6 +349,7 @@ class CRUDView(View):
             self.object_list = queryset
             context = self.get_context_data(
                 page_obj=None,
+                filter=self.filterset,
                 is_paginated=False,
                 paginator=None,
             )
@@ -320,6 +359,7 @@ class CRUDView(View):
             self.object_list = page.object_list
             context = self.get_context_data(
                 page_obj=page,
+                filter=self.filterset,
                 is_paginated=page.has_other_pages(),
                 paginator=page.paginator,
             )

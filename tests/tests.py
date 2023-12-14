@@ -10,6 +10,7 @@ from .models import Bookmark
 class BookmarkView(CRUDView):
     model = Bookmark
     fields = ["url", "title", "note"]
+    list_fields = ["url", "title"]
     filterset_fields = [
         "favourite",
     ]
@@ -45,6 +46,9 @@ class BasicTests(TestCase):
         self.assertContains(response, self.github.title)
         self.assertContains(response, self.fosstodon.title)
         self.assertContains(response, ">Add a new bookmark</a>")
+        self.assertNotContains(response, self.homepage.note)
+        self.assertNotContains(response, self.github.note)
+        self.assertNotContains(response, self.fosstodon.note)
 
     def test_list_empty(self):
         Bookmark.objects.all().delete()
