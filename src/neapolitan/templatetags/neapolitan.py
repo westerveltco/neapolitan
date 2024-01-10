@@ -1,19 +1,26 @@
 from django import template
 from django.urls import reverse
-from django.utils.safestring import mark_safe
 
 register = template.Library()
 
 
 def action_links(object):
     model_name = object._meta.model_name
-    actions = [
-        (reverse(f"{model_name}-detail", kwargs={"pk": object.pk}), "View"),
-        (reverse(f"{model_name}-update", kwargs={"pk": object.pk}), "Edit"),
-        (reverse(f"{model_name}-delete", kwargs={"pk": object.pk}), "Delete"),
-    ]
-    links = [f"<a href='{url}'>{anchor_text}</a>" for url, anchor_text in actions]
-    return mark_safe(" | ".join(links))
+    actions = {
+        "detail": {
+            "url": reverse(f"{model_name}-detail", kwargs={"pk": object.pk}),
+            "text": "View",
+        },
+        "update": {
+            "url": reverse(f"{model_name}-update", kwargs={"pk": object.pk}),
+            "text": "Edit",
+        },
+        "delete": {
+            "url": reverse(f"{model_name}-delete", kwargs={"pk": object.pk}),
+            "text": "Delete",
+        },
+    }
+    return actions
 
 
 @register.inclusion_tag("neapolitan/partial/detail.html")

@@ -28,7 +28,9 @@
                   ">{{ field.value }}</td>
     {% endfor %}
         <td class="py-3.5 px-3 text-right text-sm font-medium [&_a]:text-indigo-600 [&_a:hover]:text-indigo-900">
-            {{ object.actions }}
+            {% for action in object.actions %}
+                <a href="{{ action.url }}">{{ action.text }}</a>{% if not forloop.last %} | {% endif %}
+            {% endfor %}
         </td>
 </tr>
 {% endfor %}
