@@ -55,7 +55,7 @@ def object_list(objects, fields):
         {
             "object": {f: getattr(object, f) for f in fields},
             "fields": [
-                object._meta.get_field(f).value_to_string(object) for f in fields
+                {"name": f, "value": object._meta.get_field(f).value_to_string(object)} for f in fields
             ],
             "actions": action_links(object),
         }
