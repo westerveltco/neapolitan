@@ -39,7 +39,7 @@ def object_detail(object, fields):
     def iter():
         for f in fields:
             mf = object._meta.get_field(f)
-            yield (mf.verbose_name, mf.value_to_string(object))
+            yield (mf.verbose_name, str(getattr(object, f)))
 
     return {"object": iter()}
 
@@ -60,10 +60,8 @@ def object_list(objects, fields):
     headers = [objects[0]._meta.get_field(f).verbose_name for f in fields]
     object_list = [
         {
-            "object": {f: getattr(object, f) for f in fields},
-            "fields": [
-                {"name": f, "value": object._meta.get_field(f).value_to_string(object)} for f in fields
-            ],
+            "object": object,
+            "fields": [{"name": f, "value": str(getattr(object, f))} for f in fields],
             "actions": action_links(object),
         }
         for object in objects
