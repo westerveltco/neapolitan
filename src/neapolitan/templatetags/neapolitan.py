@@ -1,26 +1,20 @@
 from django import template
 from django.urls import reverse
+from django.utils.safestring import mark_safe
+
+from neapolitan.views import Role
 
 register = template.Library()
 
 
-def action_links(object):
-    model_name = object._meta.model_name
-    actions = {
-        "detail": {
-            "url": reverse(f"{model_name}-detail", kwargs={"pk": object.pk}),
-            "text": "View",
-        },
-        "update": {
-            "url": reverse(f"{model_name}-update", kwargs={"pk": object.pk}),
-            "text": "Edit",
-        },
-        "delete": {
-            "url": reverse(f"{model_name}-delete", kwargs={"pk": object.pk}),
-            "text": "Delete",
-        },
-    }
-    return actions
+def action_links(view, object):
+    actions = [
+        (Role.DETAIL.reverse(view, object), "View"),
+        (Role.UPDATE.reverse(view, object), "Edit"),
+        (Role.DELETE.reverse(view, object), "Delete"),
+    ]
+    links = [f"<a href='{url}'>{anchor_text}</a>" for url, anchor_text in actions]
+    return mark_safe(" | ".join(links))
 
 
 @register.inclusion_tag("neapolitan/partial/detail.html")
@@ -45,18 +39,19 @@ def object_detail(object, fields):
 
 
 @register.inclusion_tag("neapolitan/partial/list.html")
-def object_list(objects, fields):
+def object_list(objects, view):
     """
     Renders a list of objects with the given fields.
 
     Inclusion tag usage::
 
-        {% object_list objects fields %}
+        {% object_list objects view %}
 
     Template: ``neapolitan/partial/list.html`` — Will render a table of objects
     with links to view, edit, and delete views.
     """
 
+    fields = view.fields
     headers = [objects[0]._meta.get_field(f).verbose_name for f in fields]
     object_list = [
         {
