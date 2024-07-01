@@ -1,6 +1,4 @@
 from django import template
-from django.urls import reverse
-from django.utils.safestring import mark_safe
 
 from neapolitan.views import Role
 
@@ -8,13 +6,21 @@ register = template.Library()
 
 
 def action_links(view, object):
-    actions = [
-        (Role.DETAIL.reverse(view, object), "View"),
-        (Role.UPDATE.reverse(view, object), "Edit"),
-        (Role.DELETE.reverse(view, object), "Delete"),
-    ]
-    links = [f"<a href='{url}'>{anchor_text}</a>" for url, anchor_text in actions]
-    return mark_safe(" | ".join(links))
+    actions = {
+        "detail": {
+            "url": Role.DETAIL.reverse(view, object),
+            "text": "View",
+        },
+        "update": {
+            "url": Role.UPDATE.reverse(view, object),
+            "text": "Edit",
+        },
+        "delete": {
+            "url": Role.DELETE.reverse(view, object),
+            "text": "Delete",
+        },
+    }
+    return actions
 
 
 @register.inclusion_tag("neapolitan/partial/detail.html")
@@ -51,7 +57,7 @@ def object_list(objects, view):
     with links to view, edit, and delete views.
     """
 
-    fields = view.fields
+    fields = view.get_list_fields()
     headers = [objects[0]._meta.get_field(f).verbose_name for f in fields]
     object_list = [
         {
