@@ -63,7 +63,7 @@ def object_list(objects, view):
         {
             "object": object,
             "fields": [{"name": f, "value": str(getattr(object, f))} for f in fields],
-            "actions": action_links(object),
+            "actions": action_links(view, object),
         }
         for object in objects
     ]
