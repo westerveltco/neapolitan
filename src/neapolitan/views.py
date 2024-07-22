@@ -2,13 +2,13 @@ import enum
 
 from django.core.exceptions import ImproperlyConfigured
 from django.core.paginator import InvalidPage, Paginator
-from django.db import models
 from django.forms import models as model_forms
 from django.http import Http404, HttpResponseRedirect
 from django.shortcuts import get_object_or_404
 from django.template.response import TemplateResponse
 from django.urls import path, reverse
 from django.utils.decorators import classonlymethod
+from django.utils.functional import classproperty
 from django.utils.translation import gettext as _
 from django.views.generic import View
 from django_filters.filterset import filterset_factory
@@ -58,6 +58,45 @@ class Role(enum.Enum):
             case Role.DELETE:
                 return {"template_name_suffix": "_confirm_delete"}
 
+    @property
+    def url_name_component(self):
+        return self.value
+
+    def url_pattern(self, view_cls):
+        url_base = view_cls.url_base
+        url_kwarg = view_cls.lookup_url_kwarg or view_cls.lookup_field
+        path_converter = view_cls.path_converter
+        match self:
+            case Role.LIST:
+                return f"{url_base}/"
+            case Role.DETAIL:
+                return f"{url_base}/<{path_converter}:{url_kwarg}>/"
+            case Role.CREATE:
+                return f"{url_base}/new/"
+            case Role.UPDATE:
+                return f"{url_base}/<{path_converter}:{url_kwarg}>/edit/"
+            case Role.DELETE:
+                return f"{url_base}/<{path_converter}:{url_kwarg}>/delete/"
+
+    def get_url(self, view_cls):
+        return path(
+            self.url_pattern(view_cls),
+            view_cls.as_view(role=self),
+            name=f"{view_cls.url_base}-{self.url_name_component}",
+        )
+
+    def reverse(self, view, object=None):
+        url_name = f"{view.url_base}-{self.url_name_component}"
+        url_kwarg = view.lookup_url_kwarg or view.lookup_field
+        match self:
+            case Role.LIST | Role.CREATE:
+                return reverse(url_name)
+            case _:
+                return reverse(
+                    url_name,
+                    kwargs={url_kwarg: getattr(object, view.lookup_field)},
+                )
+
 
 class CRUDView(View):
     """
@@ -78,6 +117,7 @@ class CRUDView(View):
     # value as `lookup_field`.
     lookup_field = "pk"
     lookup_url_kwarg = None
+    path_converter = "int"
     object = None
 
     # All the following are optional, and fall back to default values
@@ -97,42 +137,92 @@ class CRUDView(View):
     # Suffix that should be appended to automatically generated template names.
     template_name_suffix = None
 
-    # Filtering.
+    def list(self, request, *args, **kwargs):
+        """GET handler for the list view."""
 
-    def get_filterset(self, queryset=None):
-        filterset_class = getattr(self, "filterset_class", None)
-        filterset_fields = getattr(self, "filterset_fields", None)
-
-        if filterset_class is None and filterset_fields:
-            filterset_class = filterset_factory(self.model, fields=filterset_fields)
-
-        if filterset_class is None:
-            return None
-
-        return filterset_class(
-            self.request.GET,
-            queryset=queryset,
-            request=self.request,
-        )
-
-    # Queryset and object lookup
-
-    def get_object(self):
-        """
-        Returns the object the view is displaying.
-        """
         queryset = self.get_queryset()
-        lookup_url_kwarg = self.lookup_url_kwarg or self.lookup_field
 
-        try:
-            lookup = {self.lookup_field: self.kwargs[lookup_url_kwarg]}
-        except KeyError:
-            msg = "Lookup field '%s' was not provided in view kwargs to '%s'"
-            raise ImproperlyConfigured(
-                msg % (lookup_url_kwarg, self.__class__.__name__)
+        self.filterset = self.get_filterset(queryset)
+        if self.filterset and (
+            not self.filterset.is_bound
+            or self.filterset.is_valid()
+            or not self.get_strict()
+        ):
+            queryset = self.filterset.qs
+
+        if not self.allow_empty and not queryset.exists():
+            raise Http404
+
+        paginate_by = self.get_paginate_by()
+        if paginate_by is None:
+            # Unpaginated response
+            self.object_list = queryset
+            context = self.get_context_data(
+                page_obj=None,
+                is_paginated=False,
+                paginator=None,
+                filter=self.filterset,
+                filterset=self.filterset,
+            )
+        else:
+            # Paginated response
+            page = self.paginate_queryset(queryset, paginate_by)
+            self.object_list = page.object_list
+            context = self.get_context_data(
+                page_obj=page,
+                is_paginated=page.has_other_pages(),
+                paginator=page.paginator,
+                filter=self.filterset,
+                filterset=self.filterset,
             )
 
-        return get_object_or_404(queryset, **lookup)
+        return self.render_to_response(context)
+
+    def detail(self, request, *args, **kwargs):
+        """GET handler for the detail view."""
+
+        self.object = self.get_object()
+        context = self.get_context_data()
+        return self.render_to_response(context)
+
+    def show_form(self, request, *args, **kwargs):
+        """GET handler for the create and update form views."""
+
+        if self.role is Role.UPDATE:
+            self.object = self.get_object()
+        form = self.get_form(instance=self.object)
+        context = self.get_context_data(form=form)
+        return self.render_to_response(context)
+
+    def process_form(self, request, *args, **kwargs):
+        """POST handler for the create and update form views."""
+
+        if self.role is Role.UPDATE:
+            self.object = self.get_object()
+        form = self.get_form(
+            data=request.POST,
+            files=request.FILES,
+            instance=self.object,
+        )
+        if form.is_valid():
+            return self.form_valid(form)
+        return self.form_invalid(form)
+
+    def confirm_delete(self, request, *args, **kwargs):
+        """GET handler for the delete confirmation view."""
+
+        self.object = self.get_object()
+        context = self.get_context_data()
+        return self.render_to_response(context)
+
+    def process_deletion(self, request, *args, **kwargs):
+        """POST handler for the delete confirmation view."""
+
+        self.object = self.get_object()
+        self.object.delete()
+        return HttpResponseRedirect(self.get_success_url())
+
+    # Queryset and object lookup
 
     def get_queryset(self):
         """
@@ -153,38 +243,24 @@ class CRUDView(View):
         )
         raise ImproperlyConfigured(msg % self.__class__.__name__)
 
-    def get_fields(self):
-        # Construct the method name based on the current role.
-        # For example, if self.role is Role.LIST, method_name will be 'list_fields'.
-        method_name = f"{self.role}_fields"
+    def get_object(self):
+        """
+        Returns the object the view is displaying.
+        """
+        queryset = self.get_queryset()
+        lookup_url_kwarg = self.lookup_url_kwarg or self.lookup_field
 
-        if self.fields is not None:
-            # Check if the attribute (method or property) with the constructed name exists in the class.
-            if hasattr(self, method_name):
-                # If the attribute exists, check if it is callable (i.e., if it's a method).
-                if callable(getattr(self, method_name)):
-                    # If it's a callable method, call the method and return its result.
-                    return getattr(self, method_name)()
-                # If the attribute exists but is not callable (e.g., a property), directly return its value.
-                return getattr(self, method_name)
-            
-            # If the specific role-based method or property does not exist, fall back to the default 'fields'.
-            return self.fields
+        try:
+            lookup = {self.lookup_field: self.kwargs[lookup_url_kwarg]}
+        except KeyError:
+            msg = "Lookup field '%s' was not provided in view kwargs to '%s'"
+            raise ImproperlyConfigured(
+                msg % (lookup_url_kwarg, self.__class__.__name__)
+            )
 
-        msg = "'%s' must define 'fields' or override 'get_fields()'"
-        raise ImproperlyConfigured(msg % self.__class__.__name__)
+        return get_object_or_404(queryset, **lookup)
 
-    def get_detail_fields(self):
-        if self.detail_fields:
-            return self.detail_fields
-        return self.fields
-
-    def get_list_fields(self):
-        if self.list_fields:
-            return self.list_fields
-        return self.fields
-
-    # Form instantiation
+    # Form handling
 
     def get_form_class(self):
         """
@@ -209,7 +285,28 @@ class CRUDView(View):
         cls = self.get_form_class()
         return cls(data=data, files=files, **kwargs)
 
-    # Pagination
+    def form_valid(self, form):
+        self.object = form.save()
+        return HttpResponseRedirect(self.get_success_url())
+
+    def form_invalid(self, form):
+        context = self.get_context_data(form=form)
+        return self.render_to_response(context)
+
+    def get_success_url(self):
+        assert self.model is not None, (
+            "'%s' must define 'model' or override 'get_success_url()'"
+            % self.__class__.__name__
+        )
+        if self.role is Role.DELETE:
+            success_url = reverse(f"{self.url_base}-list")
+        else:
+            success_url = reverse(
+                f"{self.url_base}-detail", kwargs={"pk": self.object.pk}
+            )
+        return success_url
+
+    # Pagination and filtering
 
     def get_paginate_by(self):
         """
@@ -246,6 +343,22 @@ class CRUDView(View):
             msg = "Invalid page (%s): %s"
             raise Http404(_(msg) % (page_number, str(exc)))
 
+    def get_filterset(self, queryset=None):
+        filterset_class = getattr(self, "filterset_class", None)
+        filterset_fields = getattr(self, "filterset_fields", None)
+
+        if filterset_class is None and filterset_fields:
+            filterset_class = filterset_factory(self.model, fields=filterset_fields)
+
+        if filterset_class is None:
+            return None
+
+        return filterset_class(
+            self.request.GET,
+            queryset=queryset,
+            request=self.request,
+        )
+
     # Response rendering
 
     def get_context_object_name(self, is_list=False):
@@ -263,24 +376,10 @@ class CRUDView(View):
         return None
 
     def get_context_data(self, **kwargs):
-        """
-        Returns a dictionary to use as the context of the response.
-
-        Takes a set of keyword arguments to use as the base context,
-        and adds the following keys:
-
-        * ``view``: A reference to the view object itself.
-        * The ``object_verbose_name`` and ``object_verbose_name_plural`` of the
-          model.
-        * ``object`` or ``object_list``: The object or list of objects being
-          displayed, plus more user-friendly versions using the model, such as
-          ``bookmark`` or ``bookmark_list``.
-        * ``create_view_url``: The URL of the create view
-        """
         kwargs["view"] = self
         kwargs["object_verbose_name"] = self.model._meta.verbose_name
         kwargs["object_verbose_name_plural"] = self.model._meta.verbose_name_plural
-        kwargs["create_view_url"] = reverse(f"{self.model._meta.model_name}-create")
+        kwargs["create_view_url"] = reverse(f"{self.url_base}-create")
 
         if getattr(self, "object", None) is not None:
             kwargs["object"] = self.object
@@ -329,97 +428,40 @@ class CRUDView(View):
             request=self.request, template=self.get_template_names(), context=context
         )
 
-    def list(self, request, *args, **kwargs):
-        queryset = self.get_queryset()
-        self.filterset = self.get_filterset(queryset)
+    # Fields
 
-        if self.filterset and (
-            not self.filterset.is_bound
-            or self.filterset.is_valid()
-            or not self.get_strict()
-        ):
-            queryset = self.filterset.qs
+    def get_fields(self):
+        # Construct the method name based on the current role.
+        # For example, if self.role is Role.LIST, method_name will be 'list_fields'.
+        method_name = f"{self.role}_fields"
 
-        if not self.allow_empty and not queryset.exists():
-            raise Http404
+        if self.fields is not None:
+            # Check if the attribute (method or property) with the constructed name exists in the class.
+            if hasattr(self, method_name):
+                # If the attribute exists, check if it is callable (i.e., if it's a method).
+                if callable(getattr(self, method_name)):
+                    # If it's a callable method, call the method and return its result.
+                    return getattr(self, method_name)()
+                # If the attribute exists but is not callable (e.g., a property), directly return its value.
+                return getattr(self, method_name)
 
-        paginate_by = self.get_paginate_by()
-        if paginate_by is None:
-            # Unpaginated response
-            self.object_list = queryset
-            context = self.get_context_data(
-                page_obj=None,
-                filter=self.filterset,
-                is_paginated=False,
-                paginator=None,
-            )
-        else:
-            # Paginated response
-            page = self.paginate_queryset(queryset, paginate_by)
-            self.object_list = page.object_list
-            context = self.get_context_data(
-                page_obj=page,
-                filter=self.filterset,
-                is_paginated=page.has_other_pages(),
-                paginator=page.paginator,
-            )
+            # If the specific role-based method or property does not exist, fall back to the default 'fields'.
+            return self.fields
 
-        return self.render_to_response(context)
+        msg = "'%s' must define 'fields' or override 'get_fields()'"
+        raise ImproperlyConfigured(msg % self.__class__.__name__)
 
-    def detail(self, request, *args, **kwargs):
-        self.object = self.get_object()
-        context = self.get_context_data()
-        return self.render_to_response(context)
+    def get_detail_fields(self):
+        if self.detail_fields:
+            return self.detail_fields
+        return self.fields
 
-    def show_form(self, request, *args, **kwargs):
-        if self.role is Role.UPDATE:
-            self.object = self.get_object()
-        form = self.get_form(instance=self.object)
-        context = self.get_context_data(form=form)
-        return self.render_to_response(context)
+    def get_list_fields(self):
+        if self.list_fields:
+            return self.list_fields
+        return self.fields
 
-    def process_form(self, request, *args, **kwargs):
-        if self.role is Role.UPDATE:
-            self.object = self.get_object()
-        form = self.get_form(
-            data=request.POST,
-            files=request.FILES,
-            instance=self.object,
-        )
-        if form.is_valid():
-            return self.form_valid(form)
-        return self.form_invalid(form)
-
-    def form_valid(self, form):
-        self.object = form.save()
-        return HttpResponseRedirect(self.get_success_url())
-
-    def form_invalid(self, form):
-        context = self.get_context_data(form=form)
-        return self.render_to_response(context)
-
-    def get_success_url(self):
-        assert self.model is not None, (
-            "'%s' must define 'model' or override 'get_success_url()'"
-            % self.__class__.__name__
-        )
-        if self.role is Role.DELETE:
-            success_url = reverse(f"{self.model._meta.model_name}-list")
-        else:
-            success_url = reverse(
-                f"{self.model._meta.model_name}-detail", kwargs={"pk": self.object.pk}
-            )
-        return success_url
-
-    def confirm_delete(self, request, *args, **kwargs):
-        self.object = self.get_object()
-        context = self.get_context_data()
-        return self.render_to_response(context)
-
-    def process_deletion(self, request, *args, **kwargs):
-        self.object = self.get_object()
-        self.object.delete()
-        return HttpResponseRedirect(self.get_success_url())
+    # URLs and view callables
 
     @classonlymethod
     def as_view(cls, role: Role, **initkwargs):
@@ -484,39 +526,23 @@ class CRUDView(View):
 
         return view
 
+    @classproperty
+    def url_base(cls):
+        """
+        The base component of generated URLs.
+
+        Defaults to the model's name, but may be overridden by setting
+        `url_base` directly on the class, overriding this property::
+
+            class AlternateCRUDView(CRUDView):
+                model = Bookmark
+                url_base = "something-else"
+        """
+        return cls.model._meta.model_name
+
     @classonlymethod
-    def get_urls(cls):
-        verbose_name = cls.model._meta.model_name
-        urlpatterns = [
-            path(
-                f"{verbose_name}/",
-                cls.as_view(role=Role.LIST),
-                name=f"{verbose_name}-list",
-            ),
-            path(
-                f"{verbose_name}/new/",
-                cls.as_view(role=Role.CREATE),
-                name=f"{verbose_name}-create",
-            ),
-            # TODO: make the lookup field configurable. Determined by
-            # lookup_field and lookup_url_kwarg. ???: how to handle the type of
-            # the converter? (int, slug, etc.)
-            # It's just a string that gets passed to path(). SO an extra view
-            # field with the name of a registered converter.
-            path(
-                f"{verbose_name}/<int:pk>/",
-                cls.as_view(role=Role.DETAIL),
-                name=f"{verbose_name}-detail",
-            ),
-            path(
-                f"{verbose_name}/<int:pk>/edit/",
-                cls.as_view(role=Role.UPDATE),
-                name=f"{verbose_name}-update",
-            ),
-            path(
-                f"{verbose_name}/<int:pk>/delete/",
-                cls.as_view(role=Role.DELETE),
-                name=f"{verbose_name}-delete",
-            ),
-        ]
-        return urlpatterns
+    def get_urls(cls, roles=None):
+        """Classmethod to generate URL patterns for the view."""
+        if roles is None:
+            roles = iter(Role)
+        return [role.get_url(cls) for role in roles]
